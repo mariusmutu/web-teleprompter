@@ -34,14 +34,13 @@ const WebTeleprompter = () => {
       console.error('Error initializing video:', err);
       return false;
     }
-  }, []);
+  }, []); // No dependencies needed as it only uses the ref
 
   const startCamera = useCallback(async () => {
     try {
       setPermissionStatus('requesting');
       console.log('Starting camera initialization...');
 
-      // Stop any existing stream
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
@@ -58,10 +57,9 @@ const WebTeleprompter = () => {
       const newStream = await navigator.mediaDevices.getUserMedia(constraints);
       console.log('Stream obtained:', newStream.id);
       
-      setStream(newStream);
-      
       const success = await initializeVideoElement(newStream);
       if (success) {
+        setStream(newStream);
         setHasPermission(true);
         setPermissionStatus('granted');
         setError(null);
@@ -74,7 +72,7 @@ const WebTeleprompter = () => {
       setHasPermission(false);
       setPermissionStatus('denied');
     }
-  }, [facingMode, initializeVideoElement]);
+  }, [facingMode, initializeVideoElement, stream]);
 
   // Effect to handle permissions
   useEffect(() => {
@@ -110,7 +108,6 @@ const WebTeleprompter = () => {
 
     checkPermissions();
 
-    // Cleanup function
     return () => {
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
@@ -132,7 +129,7 @@ const WebTeleprompter = () => {
   }, [autoScroll, scrollSpeed]);
 
   // Recording handlers
-  const toggleRecording = async () => {
+  const toggleRecording = useCallback(async () => {
     if (isRecording && mediaRecorder) {
       mediaRecorder.stop();
       setIsRecording(false);
@@ -160,11 +157,11 @@ const WebTeleprompter = () => {
       setMediaRecorder(newMediaRecorder);
       setIsRecording(true);
     }
-  };
+  }, [isRecording, mediaRecorder, stream]);
 
-  const toggleCamera = () => {
+  const toggleCamera = useCallback(() => {
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
-  };
+  }, []);
 
   // Loading state
   if (permissionStatus === 'checking' || permissionStatus === 'requesting') {
