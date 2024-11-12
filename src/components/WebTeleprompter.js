@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 const WebTeleprompter = () => {
   const [hasPermission, setHasPermission] = useState(false);
@@ -12,192 +12,67 @@ const WebTeleprompter = () => {
   const [mediaRecorder, setMediaRecorder] = useState(null);
   const [facingMode, setFacingMode] = useState('user');
   const [permissionStatus, setPermissionStatus] = useState('checking');
-  const [stream, setStream] = useState(null);
-  const [isVideoMounted, setIsVideoMounted] = useState(false);
 
   const videoRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const chunksRef = useRef([]);
-  const mountAttempts = useRef(0);
+  const streamRef = useRef(null);
 
-  // Video mount effect
-  useEffect(() => {
-    if (videoRef.current) {
-      setIsVideoMounted(true);
-      console.log('Video element mounted successfully');
-    }
-    return () => setIsVideoMounted(false);
-  }, []);
-
-  const initializeVideoElement = useCallback(async (streamToUse) => {
-    console.log('Initializing video element...');
-    
-    // Check if video element is mounted
-    const waitForMount = async () => {
-      mountAttempts.current = 0;
-      while (!videoRef.current && mountAttempts.current < 10) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-        mountAttempts.current++;
-        console.log(`Waiting for video element... attempt ${mountAttempts.current}`);
-      }
-      
-      if (!videoRef.current) {
-        throw new Error('Video element failed to mount after multiple attempts');
-      }
-    };
-
+  const startCamera = async () => {
     try {
-      await waitForMount();
-      
-      // Reset the video element
-      if (videoRef.current.srcObject) {
-        videoRef.current.srcObject = null;
-      }
-      
-      // Set new stream
-      videoRef.current.srcObject = streamToUse;
-      
-      // Wait for metadata with timeout
-      await Promise.race([
-        new Promise((resolve, reject) => {
-          videoRef.current.onloadedmetadata = resolve;
-          videoRef.current.onerror = () => reject(new Error('Video element error during metadata load'));
-        }),
-        new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Video metadata load timeout')), 5000)
-        )
-      ]);
-
-      // Attempt to play
-      await videoRef.current.play();
-      console.log('Video playing successfully');
-      return true;
-    } catch (err) {
-      console.error('Video initialization error:', err);
-      throw err;
-    }
-  }, []);
-
-  const startCamera = useCallback(async () => {
-    if (!isVideoMounted) {
-      console.error('Video element not mounted yet');
-      setError('Video element not ready. Please try again.');
-      return;
-    }
-
-    try {
-      setPermissionStatus('requesting');
-      console.log('Starting camera...');
-
-      // Clean up existing stream
-      if (stream) {
-        stream.getTracks().forEach(track => {
-          track.stop();
-          console.log('Stopped track:', track.kind);
-        });
+      // Clean up existing stream if any
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
       }
 
       const constraints = {
-        video: {
-          facingMode,
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
+        video: { facingMode },
         audio: true
       };
 
-      console.log('Requesting media with constraints:', constraints);
-      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-      console.log('Got new stream:', newStream.id);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
 
-      await initializeVideoElement(newStream);
-      setStream(newStream);
-      setHasPermission(true);
-      setPermissionStatus('granted');
-      setError(null);
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+        setHasPermission(true);
+        setPermissionStatus('granted');
+        setError(null);
+      } else {
+        throw new Error('Video element not available');
+      }
     } catch (err) {
-      console.error('Camera start error:', err);
+      console.error('Camera error:', err);
       setError(err.message);
       setHasPermission(false);
       setPermissionStatus('denied');
-
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
     }
-  }, [facingMode, initializeVideoElement, stream, isVideoMounted]);
+  };
 
-  // Camera initialization effect
   useEffect(() => {
-    let mounted = true;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError('Your browser does not support camera access');
+      return;
+    }
 
-    const initCamera = async () => {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setError('Your browser does not support camera access');
-        return;
-      }
-
-      // Wait for video element to be mounted
-      if (!isVideoMounted) {
-        console.log('Waiting for video element to mount before initializing camera...');
-        return;
-      }
-
-      try {
-        const permissionResult = await navigator.permissions.query({ name: 'camera' });
-        
-        if (mounted) {
-          if (permissionResult.state === 'granted') {
-            await startCamera();
-          } else {
-            setPermissionStatus(permissionResult.state);
-            setHasPermission(false);
-          }
-        }
-      } catch (err) {
-        if (mounted) {
-          // Fall back to direct camera access
-          await startCamera();
-        }
-      }
-    };
-
-    initCamera();
+    startCamera();
 
     return () => {
-      mounted = false;
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
       }
     };
-  }, [startCamera, stream, isVideoMounted]);
+  }, [facingMode]);
 
-
-  // Auto-scroll effect with debouncing
-  useEffect(() => {
-    let scrollInterval;
-    if (autoScroll && scrollContainerRef.current) {
-      scrollInterval = setInterval(() => {
-        requestAnimationFrame(() => {
-          if (scrollContainerRef.current) {
-            scrollContainerRef.current.scrollTop += scrollSpeed;
-          }
-        });
-      }, 50);
-    }
-    return () => clearInterval(scrollInterval);
-  }, [autoScroll, scrollSpeed]);
-
-  const toggleRecording = useCallback(async () => {
+  const toggleRecording = async () => {
     if (isRecording && mediaRecorder) {
       mediaRecorder.stop();
       setIsRecording(false);
-    } else if (stream) {
+    } else if (streamRef.current) {
       try {
         chunksRef.current = [];
-        const newMediaRecorder = new MediaRecorder(stream, {
-          mimeType: 'video/webm;codecs=vp8,opus'
-        });
+        const newMediaRecorder = new MediaRecorder(streamRef.current);
         
         newMediaRecorder.ondataavailable = (e) => {
           if (e.data.size > 0) {
@@ -222,19 +97,17 @@ const WebTeleprompter = () => {
         setError(`Recording failed: ${err.message}`);
       }
     }
-  }, [isRecording, mediaRecorder, stream]);
+  };
 
-  const toggleCamera = useCallback(() => {
+  const toggleCamera = () => {
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
-  }, []);
+  };
 
-  if (permissionStatus === 'checking' || permissionStatus === 'requesting') {
+  if (permissionStatus === 'checking') {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
         <div className="text-white text-center">
-          <p className="mb-4">
-            {permissionStatus === 'checking' ? 'Checking camera permissions...' : 'Requesting camera access...'}
-          </p>
+          <p className="mb-4">Checking camera permissions...</p>
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
         </div>
       </div>
