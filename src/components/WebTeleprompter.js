@@ -1,4 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
+// WebTeleprompter.js
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 
 const WebTeleprompter = () => {
   const [hasPermission, setHasPermission] = useState(false);
@@ -18,7 +19,7 @@ const WebTeleprompter = () => {
   const chunksRef = useRef([]);
   const streamRef = useRef(null);
 
-  const startCamera = async () => {
+  const startCamera = useCallback(async () => {
     try {
       // Clean up existing stream if any
       if (streamRef.current) {
@@ -48,7 +49,7 @@ const WebTeleprompter = () => {
       setHasPermission(false);
       setPermissionStatus('denied');
     }
-  };
+  }, [facingMode]);
 
   useEffect(() => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -63,9 +64,21 @@ const WebTeleprompter = () => {
         streamRef.current.getTracks().forEach(track => track.stop());
       }
     };
-  }, [facingMode]);
+  }, [startCamera]);
 
-  const toggleRecording = async () => {
+  useEffect(() => {
+    let scrollInterval;
+    if (autoScroll && scrollContainerRef.current) {
+      scrollInterval = setInterval(() => {
+        if (scrollContainerRef.current) {
+          scrollContainerRef.current.scrollTop += scrollSpeed;
+        }
+      }, 50);
+    }
+    return () => clearInterval(scrollInterval);
+  }, [autoScroll, scrollSpeed]);
+
+  const toggleRecording = useCallback(async () => {
     if (isRecording && mediaRecorder) {
       mediaRecorder.stop();
       setIsRecording(false);
@@ -97,12 +110,13 @@ const WebTeleprompter = () => {
         setError(`Recording failed: ${err.message}`);
       }
     }
-  };
+  }, [isRecording, mediaRecorder]);
 
-  const toggleCamera = () => {
+  const toggleCamera = useCallback(() => {
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
-  };
+  }, []);
 
+  // Loading state
   if (permissionStatus === 'checking') {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
@@ -114,6 +128,7 @@ const WebTeleprompter = () => {
     );
   }
 
+  // Error state
   if (error) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
@@ -130,6 +145,7 @@ const WebTeleprompter = () => {
     );
   }
 
+  // Permission request state
   if (!hasPermission) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
@@ -146,6 +162,7 @@ const WebTeleprompter = () => {
     );
   }
 
+  // Main app view
   return (
     <div className="h-screen w-full bg-black relative">
       <video
