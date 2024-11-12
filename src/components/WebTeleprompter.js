@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 
 const WebTeleprompter = () => {
   const [hasPermission, setHasPermission] = useState(null);
@@ -17,7 +17,7 @@ const WebTeleprompter = () => {
   const scrollContainerRef = useRef(null);
   const chunksRef = useRef([]);
 
-  const startCamera = async () => {
+  const startCamera = useCallback(async () => {
     try {
       setPermissionStatus('requesting');
 
@@ -40,7 +40,7 @@ const WebTeleprompter = () => {
       setHasPermission(false);
       setPermissionStatus('denied');
     }
-  };
+  }, [facingMode]); // Add facingMode as dependency
 
   // Check permissions when component mounts
   useEffect(() => {
@@ -49,7 +49,7 @@ const WebTeleprompter = () => {
         if (!navigator.mediaDevices?.getUserMedia) {
           throw new Error('Camera not supported');
         }
-        startCamera();
+        await startCamera();
       } catch (err) {
         setError(err.message);
         setHasPermission(false);
@@ -58,7 +58,7 @@ const WebTeleprompter = () => {
     };
 
     checkPermissions();
-  }, []);
+  }, [startCamera]); // Add startCamera as dependency
 
   // Handle auto-scroll
   useEffect(() => {
@@ -73,7 +73,7 @@ const WebTeleprompter = () => {
     return () => clearInterval(interval);
   }, [autoScroll, scrollSpeed]);
 
-  const toggleRecording = async () => {
+  const toggleRecording = useCallback(async () => {
     if (isRecording && mediaRecorder) {
       mediaRecorder.stop();
       setIsRecording(false);
@@ -102,15 +102,21 @@ const WebTeleprompter = () => {
       setMediaRecorder(recorder);
       setIsRecording(true);
     }
-  };
+  }, [isRecording, mediaRecorder]);
 
-  const toggleCamera = () => {
+  const toggleCamera = useCallback(() => {
     setFacingMode(current => {
       const newMode = current === 'user' ? 'environment' : 'user';
-      startCamera();
       return newMode;
     });
-  };
+  }, []);
+
+  // Effect to handle camera changes
+  useEffect(() => {
+    if (hasPermission) {
+      startCamera();
+    }
+  }, [facingMode, hasPermission, startCamera]);
 
   if (permissionStatus === 'checking') {
     return (
