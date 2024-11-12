@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 
 const WebTeleprompter = () => {
   const [hasPermission, setHasPermission] = useState(false);
@@ -15,23 +15,7 @@ const WebTeleprompter = () => {
   const scrollContainerRef = useRef(null);
   const chunksRef = useRef([]);
 
-  useEffect(() => {
-    startCamera();
-  }, [facingMode]);
-
-  useEffect(() => {
-    let scrollInterval;
-    if (autoScroll) {
-      scrollInterval = setInterval(() => {
-        if (scrollContainerRef.current) {
-          scrollContainerRef.current.scrollTop += scrollSpeed;
-        }
-      }, 50);
-    }
-    return () => clearInterval(scrollInterval);
-  }, [autoScroll, scrollSpeed]);
-
-  const startCamera = async () => {
+  const startCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode },
@@ -45,7 +29,23 @@ const WebTeleprompter = () => {
       console.error("Error accessing camera:", err);
       setHasPermission(false);
     }
-  };
+  }, [facingMode]);
+
+  useEffect(() => {
+    startCamera();
+  }, [startCamera]);
+
+  useEffect(() => {
+    let scrollInterval;
+    if (autoScroll) {
+      scrollInterval = setInterval(() => {
+        if (scrollContainerRef.current) {
+          scrollContainerRef.current.scrollTop += scrollSpeed;
+        }
+      }, 50);
+    }
+    return () => clearInterval(scrollInterval);
+  }, [autoScroll, scrollSpeed]);
 
   const toggleRecording = async () => {
     if (isRecording) {
