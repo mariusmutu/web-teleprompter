@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 const WebTeleprompter = () => {
   const [hasPermission, setHasPermission] = useState(null);
@@ -12,129 +12,45 @@ const WebTeleprompter = () => {
   const [mediaRecorder, setMediaRecorder] = useState(null);
   const [facingMode, setFacingMode] = useState('user');
   const [permissionStatus, setPermissionStatus] = useState('checking');
-  const [stream, setStream] = useState(null);
-  const [isVideoElementReady, setIsVideoElementReady] = useState(false);
 
   const videoRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const chunksRef = useRef([]);
 
-  // Monitor video element mount
-  useEffect(() => {
-    if (videoRef.current) {
-      console.log('Video element mounted');
-      setIsVideoElementReady(true);
-    }
-  }, []);
-
-  const initializeVideoElement = useCallback(async (streamToUse) => {
-    if (!isVideoElementReady) {
-      console.error('Video element not ready');
-      return false;
-    }
-
-    try {
-      console.log('Setting video source...');
-      videoRef.current.srcObject = streamToUse;
-      
-      return new Promise((resolve, reject) => {
-        videoRef.current.onloadedmetadata = async () => {
-          try {
-            await videoRef.current.play();
-            console.log('Video playing successfully');
-            resolve(true);
-          } catch (err) {
-            console.error('Play error:', err);
-            reject(err);
-          }
-        };
-        
-        videoRef.current.onerror = (e) => {
-          console.error('Video element error:', e);
-          reject(new Error('Video element error'));
-        };
-      });
-    } catch (err) {
-      console.error('Error setting video source:', err);
-      return false;
-    }
-  }, [isVideoElementReady]);
-
-  const startCamera = useCallback(async () => {
-    if (!isVideoElementReady) {
-      console.error('Video element not ready yet');
-      setError('Video element not initialized');
-      return;
-    }
-
+  const startCamera = async () => {
     try {
       setPermissionStatus('requesting');
-      console.log('Starting camera initialization...');
-
-      // Stop any existing stream
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
 
       const constraints = {
-        video: {
-          facingMode,
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
+        video: { facingMode },
         audio: true
       };
 
-      console.log('Requesting getUserMedia...');
-      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-      console.log('Stream obtained:', newStream.id);
-
-      const success = await initializeVideoElement(newStream);
-      if (success) {
-        setStream(newStream);
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
         setHasPermission(true);
         setPermissionStatus('granted');
         setError(null);
-      } else {
-        throw new Error('Failed to initialize video element');
       }
     } catch (err) {
-      console.error("Error accessing camera:", err);
+      console.error("Error:", err);
       setError(err.message);
       setHasPermission(false);
       setPermissionStatus('denied');
     }
-  }, [facingMode, initializeVideoElement, stream, isVideoElementReady]);
+  };
 
+  // Check permissions when component mounts
   useEffect(() => {
     const checkPermissions = async () => {
       try {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          throw new Error('Your browser does not support camera access');
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error('Camera not supported');
         }
-
-        if (!isVideoElementReady) {
-          console.log('Waiting for video element to be ready...');
-          return;
-        }
-
-        try {
-          const permissionResult = await navigator.permissions.query({ name: 'camera' });
-          
-          if (permissionResult.state === 'granted') {
-            await startCamera();
-          } else if (permissionResult.state === 'prompt') {
-            setPermissionStatus('prompt');
-            setHasPermission(false);
-          } else {
-            setPermissionStatus('denied');
-            setHasPermission(false);
-          }
-        } catch {
-          await startCamera();
-        }
+        startCamera();
       } catch (err) {
-        console.error("Permission check failed:", err);
         setError(err.message);
         setHasPermission(false);
         setPermissionStatus('error');
@@ -142,72 +58,65 @@ const WebTeleprompter = () => {
     };
 
     checkPermissions();
-  }, [startCamera, isVideoElementReady]);
+  }, []);
 
-  // Auto-scroll effect
+  // Handle auto-scroll
   useEffect(() => {
-    let scrollInterval;
+    let interval;
     if (autoScroll) {
-      scrollInterval = setInterval(() => {
+      interval = setInterval(() => {
         if (scrollContainerRef.current) {
           scrollContainerRef.current.scrollTop += scrollSpeed;
         }
       }, 50);
     }
-    return () => clearInterval(scrollInterval);
+    return () => clearInterval(interval);
   }, [autoScroll, scrollSpeed]);
 
-  // Cleanup effect
-  useEffect(() => {
-    return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [stream]);
-
-  const toggleRecording = useCallback(async () => {
+  const toggleRecording = async () => {
     if (isRecording && mediaRecorder) {
       mediaRecorder.stop();
       setIsRecording(false);
-    } else if (stream) {
+    } else if (videoRef.current?.srcObject) {
+      const stream = videoRef.current.srcObject;
+      const recorder = new MediaRecorder(stream);
       chunksRef.current = [];
-      const newMediaRecorder = new MediaRecorder(stream);
       
-      newMediaRecorder.ondataavailable = (e) => {
+      recorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
           chunksRef.current.push(e.data);
         }
       };
 
-      newMediaRecorder.onstop = () => {
+      recorder.onstop = () => {
         const blob = new Blob(chunksRef.current, { type: 'video/webm' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'teleprompter-recording.webm';
+        a.download = 'recording.webm';
         a.click();
         URL.revokeObjectURL(url);
       };
 
-      newMediaRecorder.start();
-      setMediaRecorder(newMediaRecorder);
+      recorder.start();
+      setMediaRecorder(recorder);
       setIsRecording(true);
     }
-  }, [isRecording, mediaRecorder, stream]);
+  };
 
-  const toggleCamera = useCallback(() => {
-    setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
-  }, []);
+  const toggleCamera = () => {
+    setFacingMode(current => {
+      const newMode = current === 'user' ? 'environment' : 'user';
+      startCamera();
+      return newMode;
+    });
+  };
 
-  // Loading state
-  if (permissionStatus === 'checking' || permissionStatus === 'requesting') {
+  if (permissionStatus === 'checking') {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
         <div className="text-white text-center">
-          <p className="mb-4">
-            {permissionStatus === 'checking' ? 'Checking camera permissions...' : 'Requesting camera access...'}
-          </p>
+          <p className="mb-4">Checking camera permissions...</p>
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
           <p className="mt-4 text-sm text-gray-400">Status: {permissionStatus}</p>
         </div>
@@ -215,7 +124,6 @@ const WebTeleprompter = () => {
     );
   }
 
-  // Error state
   if (error) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
@@ -232,7 +140,6 @@ const WebTeleprompter = () => {
     );
   }
 
-  // Permission request state
   if (!hasPermission) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
@@ -249,7 +156,6 @@ const WebTeleprompter = () => {
     );
   }
 
-  // Main app view
   return (
     <div className="h-screen w-full bg-black relative">
       <video
@@ -258,10 +164,6 @@ const WebTeleprompter = () => {
         playsInline
         muted
         className="w-full h-full object-cover"
-        onError={(e) => {
-          console.error('Video element error:', e);
-          setError('Video error: ' + (e.target.error?.message || 'Unknown error'));
-        }}
       />
       
       <div className="absolute inset-0 flex flex-col">
