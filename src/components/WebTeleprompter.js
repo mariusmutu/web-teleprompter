@@ -13,50 +13,65 @@ const WebTeleprompter = () => {
   const [facingMode, setFacingMode] = useState('user');
   const [permissionStatus, setPermissionStatus] = useState('checking');
   const [stream, setStream] = useState(null);
+  const [isVideoElementReady, setIsVideoElementReady] = useState(false);
 
   const videoRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const chunksRef = useRef([]);
 
-  const initializeVideoElement = useCallback(async (streamToUse) => {
-    return new Promise((resolve, reject) => {
-      // Wait a short time to ensure the video element is mounted
-      setTimeout(async () => {
-        console.log('Initializing video element...');
-        if (!videoRef.current) {
-          console.error('Video element not found');
-          reject(new Error('Video element not found'));
-          return;
-        }
-
-        try {
-          console.log('Setting video source...');
-          videoRef.current.srcObject = streamToUse;
-          
-          // Wait for the loadedmetadata event
-          videoRef.current.onloadedmetadata = async () => {
-            try {
-              await videoRef.current.play();
-              console.log('Video element initialized successfully');
-              resolve(true);
-            } catch (playError) {
-              console.error('Error playing video:', playError);
-              reject(playError);
-            }
-          };
-        } catch (err) {
-          console.error('Error initializing video:', err);
-          reject(err);
-        }
-      }, 100); // Small delay to ensure component is mounted
-    });
+  // Monitor video element mount
+  useEffect(() => {
+    if (videoRef.current) {
+      console.log('Video element mounted');
+      setIsVideoElementReady(true);
+    }
   }, []);
 
+  const initializeVideoElement = useCallback(async (streamToUse) => {
+    if (!isVideoElementReady) {
+      console.error('Video element not ready');
+      return false;
+    }
+
+    try {
+      console.log('Setting video source...');
+      videoRef.current.srcObject = streamToUse;
+      
+      return new Promise((resolve, reject) => {
+        videoRef.current.onloadedmetadata = async () => {
+          try {
+            await videoRef.current.play();
+            console.log('Video playing successfully');
+            resolve(true);
+          } catch (err) {
+            console.error('Play error:', err);
+            reject(err);
+          }
+        };
+        
+        videoRef.current.onerror = (e) => {
+          console.error('Video element error:', e);
+          reject(new Error('Video element error'));
+        };
+      });
+    } catch (err) {
+      console.error('Error setting video source:', err);
+      return false;
+    }
+  }, [isVideoElementReady]);
+
   const startCamera = useCallback(async () => {
+    if (!isVideoElementReady) {
+      console.error('Video element not ready yet');
+      setError('Video element not initialized');
+      return;
+    }
+
     try {
       setPermissionStatus('requesting');
       console.log('Starting camera initialization...');
 
+      // Stop any existing stream
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
@@ -74,17 +89,14 @@ const WebTeleprompter = () => {
       const newStream = await navigator.mediaDevices.getUserMedia(constraints);
       console.log('Stream obtained:', newStream.id);
 
-      try {
-        console.log('Attempting to initialize video element...');
-        await initializeVideoElement(newStream);
-        console.log('Video element initialized successfully');
+      const success = await initializeVideoElement(newStream);
+      if (success) {
         setStream(newStream);
         setHasPermission(true);
         setPermissionStatus('granted');
         setError(null);
-      } catch (initError) {
-        console.error('Error initializing video:', initError);
-        throw new Error('Failed to initialize video element: ' + initError.message);
+      } else {
+        throw new Error('Failed to initialize video element');
       }
     } catch (err) {
       console.error("Error accessing camera:", err);
@@ -92,14 +104,18 @@ const WebTeleprompter = () => {
       setHasPermission(false);
       setPermissionStatus('denied');
     }
-  }, [facingMode, initializeVideoElement, stream]);
+  }, [facingMode, initializeVideoElement, stream, isVideoElementReady]);
 
-  // Effect to handle permissions
   useEffect(() => {
     const checkPermissions = async () => {
       try {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           throw new Error('Your browser does not support camera access');
+        }
+
+        if (!isVideoElementReady) {
+          console.log('Waiting for video element to be ready...');
+          return;
         }
 
         try {
@@ -115,7 +131,6 @@ const WebTeleprompter = () => {
             setHasPermission(false);
           }
         } catch {
-          // If we can't query permissions, try accessing the camera directly
           await startCamera();
         }
       } catch (err) {
@@ -127,13 +142,7 @@ const WebTeleprompter = () => {
     };
 
     checkPermissions();
-
-    return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, [startCamera, stream]);
+  }, [startCamera, isVideoElementReady]);
 
   // Auto-scroll effect
   useEffect(() => {
@@ -148,7 +157,15 @@ const WebTeleprompter = () => {
     return () => clearInterval(scrollInterval);
   }, [autoScroll, scrollSpeed]);
 
-  // Recording handlers
+  // Cleanup effect
+  useEffect(() => {
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [stream]);
+
   const toggleRecording = useCallback(async () => {
     if (isRecording && mediaRecorder) {
       mediaRecorder.stop();
