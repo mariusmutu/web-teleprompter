@@ -12,26 +12,40 @@ const WebTeleprompter = () => {
   const [mediaRecorder, setMediaRecorder] = useState(null);
   const [facingMode, setFacingMode] = useState('user');
   const [permissionStatus, setPermissionStatus] = useState('checking');
+  const [stream, setStream] = useState(null);
 
   const videoRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const chunksRef = useRef([]);
-  const streamRef = useRef(null);
+
+  const initializeVideoElement = useCallback(async (streamToUse) => {
+    console.log('Initializing video element...');
+    if (!videoRef.current) {
+      console.error('Video element not found');
+      return false;
+    }
+
+    try {
+      videoRef.current.srcObject = streamToUse;
+      await videoRef.current.play();
+      console.log('Video element initialized successfully');
+      return true;
+    } catch (err) {
+      console.error('Error initializing video:', err);
+      return false;
+    }
+  }, []);
 
   const startCamera = useCallback(async () => {
     try {
       setPermissionStatus('requesting');
       console.log('Starting camera initialization...');
 
-      if (streamRef.current) {
-        console.log('Stopping existing stream...');
-        streamRef.current.getTracks().forEach(track => {
-          track.stop();
-          console.log('Track stopped:', track.kind);
-        });
+      // Stop any existing stream
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
       }
 
-      console.log('Requesting camera access with facing mode:', facingMode);
       const constraints = {
         video: {
           facingMode,
@@ -41,47 +55,18 @@ const WebTeleprompter = () => {
         audio: true
       };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      console.log('Stream obtained:', stream.id);
+      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log('Stream obtained:', newStream.id);
       
-      const videoTracks = stream.getVideoTracks();
-      console.log('Video tracks:', videoTracks.length);
+      setStream(newStream);
       
-      streamRef.current = stream;
-      
-      if (videoRef.current) {
-        console.log('Setting video source...');
-        
-        // Remove any existing srcObject
-        if (videoRef.current.srcObject) {
-          videoRef.current.srcObject = null;
-        }
-        
-        // Set the new stream
-        videoRef.current.srcObject = stream;
-        
-        // Ensure video tracks are enabled
-        videoTracks.forEach(track => {
-          track.enabled = true;
-          console.log('Track enabled:', track.label);
-        });
-
-        try {
-          console.log('Attempting to play video...');
-          await videoRef.current.play();
-          console.log('Video playback started successfully');
-          setHasPermission(true);
-          setPermissionStatus('granted');
-          setError(null);
-        } catch (playError) {
-          console.error('Error playing video:', playError);
-          setError('Failed to start video playback: ' + playError.message);
-          setPermissionStatus('error');
-        }
+      const success = await initializeVideoElement(newStream);
+      if (success) {
+        setHasPermission(true);
+        setPermissionStatus('granted');
+        setError(null);
       } else {
-        console.error('Video ref is null');
-        setError('Video element not initialized');
-        setPermissionStatus('error');
+        throw new Error('Failed to initialize video element');
       }
     } catch (err) {
       console.error("Error accessing camera:", err);
@@ -89,36 +74,30 @@ const WebTeleprompter = () => {
       setHasPermission(false);
       setPermissionStatus('denied');
     }
-  }, [facingMode]);
+  }, [facingMode, initializeVideoElement]);
 
+  // Effect to handle permissions
   useEffect(() => {
     const checkPermissions = async () => {
       try {
-        console.log('Checking browser support...');
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           throw new Error('Your browser does not support camera access');
         }
 
-        console.log('Browser supports mediaDevices');
         try {
-          // Check camera permission state
           const permissionResult = await navigator.permissions.query({ name: 'camera' });
-          console.log('Permission state:', permissionResult.state);
           
           if (permissionResult.state === 'granted') {
-            console.log('Permission already granted, starting camera...');
             await startCamera();
           } else if (permissionResult.state === 'prompt') {
-            console.log('Permission needs to be requested...');
             setPermissionStatus('prompt');
             setHasPermission(false);
           } else {
-            console.log('Permission denied');
             setPermissionStatus('denied');
             setHasPermission(false);
           }
-        } catch (permErr) {
-          console.log('Could not query permission status, trying direct access...');
+        } catch {
+          // If we can't query permissions, try accessing the camera directly
           await startCamera();
         }
       } catch (err) {
@@ -131,17 +110,15 @@ const WebTeleprompter = () => {
 
     checkPermissions();
 
+    // Cleanup function
     return () => {
-      if (streamRef.current) {
-        console.log('Cleaning up streams...');
-        streamRef.current.getTracks().forEach(track => {
-          track.stop();
-          console.log('Track stopped:', track.kind);
-        });
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
       }
     };
-  }, [startCamera]);
+  }, [startCamera, stream]);
 
+  // Auto-scroll effect
   useEffect(() => {
     let scrollInterval;
     if (autoScroll) {
@@ -154,13 +131,14 @@ const WebTeleprompter = () => {
     return () => clearInterval(scrollInterval);
   }, [autoScroll, scrollSpeed]);
 
+  // Recording handlers
   const toggleRecording = async () => {
     if (isRecording && mediaRecorder) {
       mediaRecorder.stop();
       setIsRecording(false);
-    } else if (streamRef.current) {
+    } else if (stream) {
       chunksRef.current = [];
-      const newMediaRecorder = new MediaRecorder(streamRef.current);
+      const newMediaRecorder = new MediaRecorder(stream);
       
       newMediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
@@ -188,6 +166,7 @@ const WebTeleprompter = () => {
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
   };
 
+  // Loading state
   if (permissionStatus === 'checking' || permissionStatus === 'requesting') {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
@@ -202,6 +181,7 @@ const WebTeleprompter = () => {
     );
   }
 
+  // Error state
   if (error) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
@@ -218,6 +198,7 @@ const WebTeleprompter = () => {
     );
   }
 
+  // Permission request state
   if (!hasPermission) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
@@ -234,6 +215,7 @@ const WebTeleprompter = () => {
     );
   }
 
+  // Main app view
   return (
     <div className="h-screen w-full bg-black relative">
       <video
@@ -242,19 +224,6 @@ const WebTeleprompter = () => {
         playsInline
         muted
         className="w-full h-full object-cover"
-        onLoadedMetadata={() => {
-          console.log('Video metadata loaded');
-          if (videoRef.current) {
-            videoRef.current.play().catch(err => {
-              console.error('Error playing video after metadata load:', err);
-              setError('Failed to play video: ' + err.message);
-            });
-          }
-        }}
-        onError={(e) => {
-          console.error('Video element error:', e);
-          setError('Video error: ' + (e.target.error?.message || 'Unknown error'));
-        }}
       />
       
       <div className="absolute inset-0 flex flex-col">
