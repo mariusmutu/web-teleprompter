@@ -13,57 +13,65 @@ const WebTeleprompter = () => {
   const [facingMode, setFacingMode] = useState('user');
   const [permissionStatus, setPermissionStatus] = useState('checking');
   const [stream, setStream] = useState(null);
+  const [isVideoMounted, setIsVideoMounted] = useState(false);
 
   const videoRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const chunksRef = useRef([]);
+  const mountAttempts = useRef(0);
 
-const initializeVideoElement = useCallback(async (streamToUse) => {
+  // Video mount effect
+  useEffect(() => {
+    if (videoRef.current) {
+      setIsVideoMounted(true);
+      console.log('Video element mounted successfully');
+    }
+    return () => setIsVideoMounted(false);
+  }, []);
+
+  const initializeVideoElement = useCallback(async (streamToUse) => {
     console.log('Initializing video element...');
     
-    // Wait for ref to be available
-    if (!videoRef.current) {
-      console.log('Waiting for video element to mount...');
-      await new Promise(resolve => setTimeout(resolve, 100));
-      if (!videoRef.current) {
-        throw new Error('Video element failed to mount');
+    // Check if video element is mounted
+    const waitForMount = async () => {
+      mountAttempts.current = 0;
+      while (!videoRef.current && mountAttempts.current < 10) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        mountAttempts.current++;
+        console.log(`Waiting for video element... attempt ${mountAttempts.current}`);
       }
-    }
+      
+      if (!videoRef.current) {
+        throw new Error('Video element failed to mount after multiple attempts');
+      }
+    };
 
     try {
-      // Ensure we're starting fresh
+      await waitForMount();
+      
+      // Reset the video element
       if (videoRef.current.srcObject) {
         videoRef.current.srcObject = null;
       }
-
-      // Set the stream
+      
+      // Set new stream
       videoRef.current.srcObject = streamToUse;
       
-      // Wait for metadata to load
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          reject(new Error('Video metadata load timeout'));
-        }, 5000);
-
-        videoRef.current.onloadedmetadata = () => {
-          clearTimeout(timeout);
-          resolve();
-        };
-
-        videoRef.current.onerror = (err) => {
-          clearTimeout(timeout);
-          reject(new Error(`Video error: ${err.target.error.message}`));
-        };
-      });
+      // Wait for metadata with timeout
+      await Promise.race([
+        new Promise((resolve, reject) => {
+          videoRef.current.onloadedmetadata = resolve;
+          videoRef.current.onerror = () => reject(new Error('Video element error during metadata load'));
+        }),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Video metadata load timeout')), 5000)
+        )
+      ]);
 
       // Attempt to play
-      try {
-        await videoRef.current.play();
-        console.log('Video playing successfully');
-        return true;
-      } catch (playError) {
-        throw new Error(`Failed to play video: ${playError.message}`);
-      }
+      await videoRef.current.play();
+      console.log('Video playing successfully');
+      return true;
     } catch (err) {
       console.error('Video initialization error:', err);
       throw err;
@@ -71,11 +79,17 @@ const initializeVideoElement = useCallback(async (streamToUse) => {
   }, []);
 
   const startCamera = useCallback(async () => {
+    if (!isVideoMounted) {
+      console.error('Video element not mounted yet');
+      setError('Video element not ready. Please try again.');
+      return;
+    }
+
     try {
       setPermissionStatus('requesting');
       console.log('Starting camera...');
 
-      // Stop any existing streams
+      // Clean up existing stream
       if (stream) {
         stream.getTracks().forEach(track => {
           track.stop();
@@ -111,29 +125,44 @@ const initializeVideoElement = useCallback(async (streamToUse) => {
         stream.getTracks().forEach(track => track.stop());
       }
     }
-  }, [facingMode, initializeVideoElement, stream]);
+  }, [facingMode, initializeVideoElement, stream, isVideoMounted]);
 
-  // Mount effect with cleanup
+  // Camera initialization effect
   useEffect(() => {
     let mounted = true;
 
-    const init = async () => {
+    const initCamera = async () => {
       if (!navigator.mediaDevices?.getUserMedia) {
         setError('Your browser does not support camera access');
         return;
       }
 
+      // Wait for video element to be mounted
+      if (!isVideoMounted) {
+        console.log('Waiting for video element to mount before initializing camera...');
+        return;
+      }
+
       try {
-        await startCamera();
+        const permissionResult = await navigator.permissions.query({ name: 'camera' });
+        
+        if (mounted) {
+          if (permissionResult.state === 'granted') {
+            await startCamera();
+          } else {
+            setPermissionStatus(permissionResult.state);
+            setHasPermission(false);
+          }
+        }
       } catch (err) {
         if (mounted) {
-          console.error('Mount effect camera error:', err);
-          setError(err.message);
+          // Fall back to direct camera access
+          await startCamera();
         }
       }
     };
 
-    init();
+    initCamera();
 
     return () => {
       mounted = false;
@@ -141,7 +170,7 @@ const initializeVideoElement = useCallback(async (streamToUse) => {
         stream.getTracks().forEach(track => track.stop());
       }
     };
-  }, [startCamera, stream]);
+  }, [startCamera, stream, isVideoMounted]);
 
 
   // Auto-scroll effect with debouncing
