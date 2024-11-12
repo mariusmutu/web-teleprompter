@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 
 const WebTeleprompter = () => {
-  const [hasPermission, setHasPermission] = useState(false);
+  const [hasPermission, setHasPermission] = useState(null);
+  const [error, setError] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [autoScroll, setAutoScroll] = useState(false);
   const [scrollSpeed, setScrollSpeed] = useState(1);
@@ -14,25 +15,69 @@ const WebTeleprompter = () => {
   const videoRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const chunksRef = useRef([]);
+  const streamRef = useRef(null);
 
   const startCamera = useCallback(async () => {
     try {
+      // First, stop any existing stream
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+
+      console.log('Requesting camera access...');
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode },
         audio: true
       });
+      
+      console.log('Camera access granted');
+      streamRef.current = stream;
+      
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         setHasPermission(true);
+        setError(null);
       }
     } catch (err) {
       console.error("Error accessing camera:", err);
+      setError(err.message);
       setHasPermission(false);
     }
   }, [facingMode]);
 
+  // Request permissions on component mount
   useEffect(() => {
-    startCamera();
+    const checkPermissions = async () => {
+      try {
+        // Check if the browser supports getUserMedia
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('Your browser does not support camera access');
+        }
+
+        // Check if we already have permissions
+        const result = await navigator.mediaDevices.getUserMedia({ 
+          video: true, 
+          audio: true 
+        });
+        
+        // If we get here, we have permission
+        result.getTracks().forEach(track => track.stop()); // Clean up test stream
+        await startCamera();
+      } catch (err) {
+        console.error("Permission check failed:", err);
+        setError(err.message);
+        setHasPermission(false);
+      }
+    };
+
+    checkPermissions();
+
+    // Cleanup function
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
   }, [startCamera]);
 
   useEffect(() => {
@@ -48,13 +93,12 @@ const WebTeleprompter = () => {
   }, [autoScroll, scrollSpeed]);
 
   const toggleRecording = async () => {
-    if (isRecording) {
+    if (isRecording && mediaRecorder) {
       mediaRecorder.stop();
       setIsRecording(false);
-    } else {
+    } else if (streamRef.current) {
       chunksRef.current = [];
-      const stream = videoRef.current.srcObject;
-      const newMediaRecorder = new MediaRecorder(stream);
+      const newMediaRecorder = new MediaRecorder(streamRef.current);
       
       newMediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
@@ -82,15 +126,48 @@ const WebTeleprompter = () => {
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
   };
 
+  // Show loading state
+  if (hasPermission === null) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-900">
+        <div className="text-white text-center">
+          <p className="mb-4">Checking camera permissions...</p>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-900">
+        <div className="text-white text-center p-4">
+          <p className="text-red-500 mb-4">{error}</p>
+          <button 
+            onClick={startCamera}
+            className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Show permission request
   if (!hasPermission) {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <button 
-          onClick={startCamera}
-          className="bg-blue-500 text-white px-4 py-2 rounded"
-        >
-          Allow Camera Access
-        </button>
+      <div className="flex items-center justify-center h-screen bg-gray-900">
+        <div className="text-center p-4">
+          <p className="text-white mb-4">This app needs camera and microphone access to work</p>
+          <button 
+            onClick={startCamera}
+            className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded transition-colors"
+          >
+            Allow Camera Access
+          </button>
+        </div>
       </div>
     );
   }
