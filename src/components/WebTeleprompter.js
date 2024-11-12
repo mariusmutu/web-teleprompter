@@ -18,41 +18,71 @@ const WebTeleprompter = () => {
   const scrollContainerRef = useRef(null);
   const chunksRef = useRef([]);
 
-  // Initialize video element with proper error handling
-  const initializeVideoElement = useCallback(async (streamToUse) => {
+const initializeVideoElement = useCallback(async (streamToUse) => {
+    console.log('Initializing video element...');
+    
+    // Wait for ref to be available
     if (!videoRef.current) {
-      throw new Error('Video element not initialized');
+      console.log('Waiting for video element to mount...');
+      await new Promise(resolve => setTimeout(resolve, 100));
+      if (!videoRef.current) {
+        throw new Error('Video element failed to mount');
+      }
     }
 
     try {
+      // Ensure we're starting fresh
+      if (videoRef.current.srcObject) {
+        videoRef.current.srcObject = null;
+      }
+
+      // Set the stream
       videoRef.current.srcObject = streamToUse;
       
-      // Wait for the video to be ready to play
+      // Wait for metadata to load
       await new Promise((resolve, reject) => {
-        videoRef.current.onloadedmetadata = resolve;
-        videoRef.current.onerror = () => reject(new Error('Failed to load video metadata'));
-        
-        // Set a timeout in case the metadata never loads
-        setTimeout(() => reject(new Error('Video metadata load timeout')), 5000);
+        const timeout = setTimeout(() => {
+          reject(new Error('Video metadata load timeout'));
+        }, 5000);
+
+        videoRef.current.onloadedmetadata = () => {
+          clearTimeout(timeout);
+          resolve();
+        };
+
+        videoRef.current.onerror = (err) => {
+          clearTimeout(timeout);
+          reject(new Error(`Video error: ${err.target.error.message}`));
+        };
       });
 
-      await videoRef.current.play();
-      return true;
+      // Attempt to play
+      try {
+        await videoRef.current.play();
+        console.log('Video playing successfully');
+        return true;
+      } catch (playError) {
+        throw new Error(`Failed to play video: ${playError.message}`);
+      }
     } catch (err) {
-      throw new Error(`Failed to initialize video: ${err.message}`);
+      console.error('Video initialization error:', err);
+      throw err;
     }
   }, []);
 
   const startCamera = useCallback(async () => {
     try {
       setPermissionStatus('requesting');
-      
+      console.log('Starting camera...');
+
       // Stop any existing streams
       if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach(track => {
+          track.stop();
+          console.log('Stopped track:', track.kind);
+        });
       }
 
-      // Request permissions with explicit constraints
       const constraints = {
         video: {
           facingMode,
@@ -62,78 +92,57 @@ const WebTeleprompter = () => {
         audio: true
       };
 
-      // Add explicit error handling for getUserMedia
-      const newStream = await navigator.mediaDevices.getUserMedia(constraints).catch(err => {
-        if (err.name === 'NotAllowedError') {
-          throw new Error('Camera access denied. Please grant permission and try again.');
-        } else if (err.name === 'NotFoundError') {
-          throw new Error('No camera found. Please check your device.');
-        } else {
-          throw new Error(`Camera access error: ${err.message}`);
-        }
-      });
+      console.log('Requesting media with constraints:', constraints);
+      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log('Got new stream:', newStream.id);
 
       await initializeVideoElement(newStream);
       setStream(newStream);
       setHasPermission(true);
       setPermissionStatus('granted');
       setError(null);
-      
     } catch (err) {
-      console.error("Camera initialization error:", err);
+      console.error('Camera start error:', err);
       setError(err.message);
       setHasPermission(false);
       setPermissionStatus('denied');
-      
-      // Clean up any partial stream
+
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
     }
   }, [facingMode, initializeVideoElement, stream]);
 
-  // Effect for camera initialization
+  // Mount effect with cleanup
   useEffect(() => {
-    const initCamera = async () => {
+    let mounted = true;
+
+    const init = async () => {
       if (!navigator.mediaDevices?.getUserMedia) {
         setError('Your browser does not support camera access');
-        setPermissionStatus('error');
         return;
       }
 
       try {
-        const permissionResult = await navigator.permissions.query({ name: 'camera' });
-        
-        permissionResult.onchange = () => {
-          if (permissionResult.state === 'granted') {
-            startCamera();
-          } else {
-            setHasPermission(false);
-            setPermissionStatus(permissionResult.state);
-          }
-        };
-
-        if (permissionResult.state === 'granted') {
-          await startCamera();
-        } else {
-          setPermissionStatus(permissionResult.state);
-          setHasPermission(false);
-        }
-      } catch (err) {
-        // Fall back to direct camera access if permissions API is not available
         await startCamera();
+      } catch (err) {
+        if (mounted) {
+          console.error('Mount effect camera error:', err);
+          setError(err.message);
+        }
       }
     };
 
-    initCamera();
+    init();
 
-    // Cleanup function
     return () => {
+      mounted = false;
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
     };
   }, [startCamera, stream]);
+
 
   // Auto-scroll effect with debouncing
   useEffect(() => {
