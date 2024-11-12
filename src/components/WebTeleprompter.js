@@ -19,22 +19,38 @@ const WebTeleprompter = () => {
   const chunksRef = useRef([]);
 
   const initializeVideoElement = useCallback(async (streamToUse) => {
-    console.log('Initializing video element...');
-    if (!videoRef.current) {
-      console.error('Video element not found');
-      return false;
-    }
+    return new Promise((resolve, reject) => {
+      // Wait a short time to ensure the video element is mounted
+      setTimeout(async () => {
+        console.log('Initializing video element...');
+        if (!videoRef.current) {
+          console.error('Video element not found');
+          reject(new Error('Video element not found'));
+          return;
+        }
 
-    try {
-      videoRef.current.srcObject = streamToUse;
-      await videoRef.current.play();
-      console.log('Video element initialized successfully');
-      return true;
-    } catch (err) {
-      console.error('Error initializing video:', err);
-      return false;
-    }
-  }, []); // No dependencies needed as it only uses the ref
+        try {
+          console.log('Setting video source...');
+          videoRef.current.srcObject = streamToUse;
+          
+          // Wait for the loadedmetadata event
+          videoRef.current.onloadedmetadata = async () => {
+            try {
+              await videoRef.current.play();
+              console.log('Video element initialized successfully');
+              resolve(true);
+            } catch (playError) {
+              console.error('Error playing video:', playError);
+              reject(playError);
+            }
+          };
+        } catch (err) {
+          console.error('Error initializing video:', err);
+          reject(err);
+        }
+      }, 100); // Small delay to ensure component is mounted
+    });
+  }, []);
 
   const startCamera = useCallback(async () => {
     try {
@@ -54,17 +70,21 @@ const WebTeleprompter = () => {
         audio: true
       };
 
+      console.log('Requesting getUserMedia...');
       const newStream = await navigator.mediaDevices.getUserMedia(constraints);
       console.log('Stream obtained:', newStream.id);
-      
-      const success = await initializeVideoElement(newStream);
-      if (success) {
+
+      try {
+        console.log('Attempting to initialize video element...');
+        await initializeVideoElement(newStream);
+        console.log('Video element initialized successfully');
         setStream(newStream);
         setHasPermission(true);
         setPermissionStatus('granted');
         setError(null);
-      } else {
-        throw new Error('Failed to initialize video element');
+      } catch (initError) {
+        console.error('Error initializing video:', initError);
+        throw new Error('Failed to initialize video element: ' + initError.message);
       }
     } catch (err) {
       console.error("Error accessing camera:", err);
@@ -221,6 +241,10 @@ const WebTeleprompter = () => {
         playsInline
         muted
         className="w-full h-full object-cover"
+        onError={(e) => {
+          console.error('Video element error:', e);
+          setError('Video error: ' + (e.target.error?.message || 'Unknown error'));
+        }}
       />
       
       <div className="absolute inset-0 flex flex-col">
