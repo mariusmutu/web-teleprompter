@@ -51,14 +51,37 @@ const WebTeleprompter = () => {
       
       if (videoRef.current) {
         console.log('Setting video source...');
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(err => {
-          console.error("Error playing video:", err);
-        });
         
-        setHasPermission(true);
-        setPermissionStatus('granted');
-        setError(null);
+        // Remove any existing srcObject
+        if (videoRef.current.srcObject) {
+          videoRef.current.srcObject = null;
+        }
+        
+        // Set the new stream
+        videoRef.current.srcObject = stream;
+        
+        // Ensure video tracks are enabled
+        videoTracks.forEach(track => {
+          track.enabled = true;
+          console.log('Track enabled:', track.label);
+        });
+
+        try {
+          console.log('Attempting to play video...');
+          await videoRef.current.play();
+          console.log('Video playback started successfully');
+          setHasPermission(true);
+          setPermissionStatus('granted');
+          setError(null);
+        } catch (playError) {
+          console.error('Error playing video:', playError);
+          setError('Failed to start video playback: ' + playError.message);
+          setPermissionStatus('error');
+        }
+      } else {
+        console.error('Video ref is null');
+        setError('Video element not initialized');
+        setPermissionStatus('error');
       }
     } catch (err) {
       console.error("Error accessing camera:", err);
@@ -77,7 +100,27 @@ const WebTeleprompter = () => {
         }
 
         console.log('Browser supports mediaDevices');
-        await startCamera();
+        try {
+          // Check camera permission state
+          const permissionResult = await navigator.permissions.query({ name: 'camera' });
+          console.log('Permission state:', permissionResult.state);
+          
+          if (permissionResult.state === 'granted') {
+            console.log('Permission already granted, starting camera...');
+            await startCamera();
+          } else if (permissionResult.state === 'prompt') {
+            console.log('Permission needs to be requested...');
+            setPermissionStatus('prompt');
+            setHasPermission(false);
+          } else {
+            console.log('Permission denied');
+            setPermissionStatus('denied');
+            setHasPermission(false);
+          }
+        } catch (permErr) {
+          console.log('Could not query permission status, trying direct access...');
+          await startCamera();
+        }
       } catch (err) {
         console.error("Permission check failed:", err);
         setError(err.message);
@@ -91,7 +134,10 @@ const WebTeleprompter = () => {
     return () => {
       if (streamRef.current) {
         console.log('Cleaning up streams...');
-        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current.getTracks().forEach(track => {
+          track.stop();
+          console.log('Track stopped:', track.kind);
+        });
       }
     };
   }, [startCamera]);
@@ -142,6 +188,20 @@ const WebTeleprompter = () => {
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
   };
 
+  if (permissionStatus === 'checking' || permissionStatus === 'requesting') {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-900">
+        <div className="text-white text-center">
+          <p className="mb-4">
+            {permissionStatus === 'checking' ? 'Checking camera permissions...' : 'Requesting camera access...'}
+          </p>
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
+          <p className="mt-4 text-sm text-gray-400">Status: {permissionStatus}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-900">
@@ -153,20 +213,6 @@ const WebTeleprompter = () => {
           >
             Try Again
           </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (permissionStatus === 'checking' || permissionStatus === 'requesting') {
-    return (
-      <div className="flex items-center justify-center h-screen bg-gray-900">
-        <div className="text-white text-center">
-          <p className="mb-4">
-            {permissionStatus === 'checking' ? 'Checking camera permissions...' : 'Requesting camera access...'}
-          </p>
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
-          <p className="mt-4 text-sm text-gray-400">Status: {permissionStatus}</p>
         </div>
       </div>
     );
@@ -196,6 +242,19 @@ const WebTeleprompter = () => {
         playsInline
         muted
         className="w-full h-full object-cover"
+        onLoadedMetadata={() => {
+          console.log('Video metadata loaded');
+          if (videoRef.current) {
+            videoRef.current.play().catch(err => {
+              console.error('Error playing video after metadata load:', err);
+              setError('Failed to play video: ' + err.message);
+            });
+          }
+        }}
+        onError={(e) => {
+          console.error('Video element error:', e);
+          setError('Video error: ' + (e.target.error?.message || 'Unknown error'));
+        }}
       />
       
       <div className="absolute inset-0 flex flex-col">
